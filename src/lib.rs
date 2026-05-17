@@ -292,7 +292,7 @@ pub fn run() -> Result<()> {
             }
         }
 
-        let mut output = minus::Pager::new();
+        let output = minus::Pager::new();
         output.push_str(writer_copy.get_output_as_string())?;
         minus::page_all(output)?;
         return Ok(());
