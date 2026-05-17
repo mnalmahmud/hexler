@@ -20,6 +20,12 @@ pub enum HexlerError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
+    /// Pager operation failed.
+    ///
+    /// This error occurs when `minus` fails to initialize or render output.
+    #[error("pager error: {0}")]
+    Pager(#[from] minus::error::MinusError),
+
     /// Failed to determine terminal dimensions.
     ///
     /// This error occurs when the terminal size cannot be determined, which is needed

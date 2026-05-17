@@ -6,14 +6,42 @@ pub mod hex_formatter;
 pub mod line_writer;
 
 use chrono::{DateTime, Local};
-use pager::Pager;
 use size::Size;
 use std::fs;
+use std::sync::{Arc, Mutex};
 use terminal_size::terminal_size;
 
 use clap::Parser;
 use error::{HexlerError, Result};
 use line_writer::LineWriter;
+
+#[derive(Clone)]
+struct BufferWriter {
+    data: Arc<Mutex<Vec<u8>>>,
+}
+
+impl BufferWriter {
+    fn new() -> Self {
+        BufferWriter {
+            data: Arc::new(Mutex::new(vec![])),
+        }
+    }
+
+    fn get_output_as_string(&self) -> String {
+        String::from_utf8_lossy(&self.data.lock().unwrap()).to_string()
+    }
+}
+
+impl std::io::Write for BufferWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.data.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
 
 /// Command-line arguments for hexler.
 #[derive(Parser, Debug)]
@@ -212,7 +240,7 @@ pub fn demo<W: std::io::Write + Send + 'static>(
 /// This function:
 /// 1. Parses command-line arguments
 /// 2. Determines terminal width and calculates optimal bytes_per_line (unless overridden)
-/// 3. Sets up a pager (less) for interactive viewing (unless --stdout is used)
+/// 3. Uses a pager (minus) for interactive viewing (unless --stdout is used)
 /// 4. Reads from a file or stdin and produces the hex dump
 pub fn run() -> Result<()> {
     let args: Args = Args::parse();
@@ -231,9 +259,43 @@ pub fn run() -> Result<()> {
 
     let mut line_writer = line_writer?;
 
-    // use less as the pager, much like git
     if !args.stdout {
-        Pager::with_pager("less --raw-control-chars --quit-if-one-screen").setup();
+        let writer = BufferWriter::new();
+        let writer_copy = writer.clone();
+
+        if args.demo {
+            demo(&mut line_writer, writer)?;
+        } else {
+            match args.file {
+                // Reading from a known file, print its filename and it's last modified date
+                Some(file) => {
+                    let md = fs::metadata(&file)?;
+                    let size = Size::from_bytes(md.len());
+                    let modified_time: DateTime<Local> = md.modified().unwrap().into();
+
+                    let mut file_name_str = format!("{}", file.display());
+                    if file_name_str.contains(' ') {
+                        file_name_str = format!("'{}'", file_name_str);
+                    }
+
+                    let title = format!(
+                        "\x1b[1m{}\x1b[0m   {}   {}",
+                        file_name_str,
+                        size,
+                        modified_time.format("%-d %b %Y %H:%M:%S")
+                    );
+
+                    let f = std::fs::File::open(&file);
+                    dump(title.as_str(), f?, &mut line_writer, writer)?;
+                }
+                None => dump("stdin", std::io::stdin().lock(), &mut line_writer, writer)?,
+            }
+        }
+
+        let output = minus::Pager::new();
+        output.push_str(writer_copy.get_output_as_string())?;
+        minus::page_all(output)?;
+        return Ok(());
     }
 
     if args.demo {
