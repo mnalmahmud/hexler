@@ -55,7 +55,7 @@ Output size and runtime when processing a 181 MB executable, tested with `hyperf
 | Runtime (s) | Tool       | Comment
 |------------:|------------|------------
 |       0.443 | `hastyhex` | Doesn't print extended ASCII characters, no pager
-|       0.820 | `hexler`   | Colors, prints extended characters, shows borders, automatically uses `less` pager, automatically detects terminal width
+|       0.820 | `hexler`   | Colors, prints extended characters, shows borders, automatically uses `minus` pager, automatically detects terminal width
 |       2.337 | `xxd`      | Colors, but no extended charcters, no pager
 |       3.986 | `hexyl`    | Colors, shows borders, but no pager and no extended characters
 |       4.826 | `xd`       | Prints extended ASCII characters, only grey, no pager
