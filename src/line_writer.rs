@@ -249,7 +249,7 @@ mod tests {
 
         let output = String::from_utf8_lossy(&buffer);
         assert!(output.contains("41 42 43")); // The 3 bytes we wrote
-                                              // Should have spacing for remaining bytes
+        // Should have spacing for remaining bytes
     }
 
     #[test]
