@@ -6,14 +6,38 @@ pub mod hex_formatter;
 pub mod line_writer;
 
 use chrono::{DateTime, Local};
-use pager::Pager;
 use size::Size;
 use std::fs;
+use std::io::IsTerminal;
 use terminal_size::terminal_size;
 
 use clap::Parser;
 use error::{HexlerError, Result};
 use line_writer::LineWriter;
+
+struct PagerWriter {
+    pager: minus::Pager,
+}
+
+impl PagerWriter {
+    fn new(pager: minus::Pager) -> Self {
+        Self { pager }
+    }
+}
+
+impl std::io::Write for PagerWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let text = std::str::from_utf8(buf)
+            .map(str::to_owned)
+            .unwrap_or_else(|_| String::from_utf8_lossy(buf).into_owned());
+        self.pager.push_str(text).map_err(std::io::Error::other)?;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
 
 /// Command-line arguments for hexler.
 #[derive(Parser, Debug)]
@@ -137,7 +161,7 @@ pub fn dump<R: std::io::Read, W: std::io::Write + Send + 'static>(
         use rayon::prelude::*;
 
         // Calculate number of chunks
-        let num_chunks = (data.len() + bytes_per_line - 1) / bytes_per_line;
+        let num_chunks = data.len().div_ceil(bytes_per_line);
         if num_chunks > formatted_lines_buf.len() {
             formatted_lines_buf.resize(num_chunks, Vec::with_capacity(bytes_per_line * 4));
         }
@@ -207,17 +231,50 @@ pub fn demo<W: std::io::Write + Send + 'static>(
     dump("demo, 256 bytes, 0 to 255", reader, line_writer, writer)
 }
 
+fn dump_input<W: std::io::Write + Send + 'static>(
+    args: &Args,
+    line_writer: &mut LineWriter,
+    writer: W,
+) -> Result<()> {
+    if args.demo {
+        return demo(line_writer, writer);
+    }
+
+    match &args.file {
+        // Reading from a known file, print its filename and its last modified date
+        Some(file) => {
+            let md = fs::metadata(file)?;
+            let size = Size::from_bytes(md.len());
+            let modified_time: DateTime<Local> = md.modified()?.into();
+
+            let mut file_name_str = format!("{}", file.display());
+            if file_name_str.contains(' ') {
+                file_name_str = format!("'{file_name_str}'");
+            }
+
+            let title = format!(
+                "\x1b[1m{}\x1b[0m   {}   {}",
+                file_name_str,
+                size,
+                modified_time.format("%-d %b %Y %H:%M:%S")
+            );
+
+            let f = std::fs::File::open(file)?;
+            dump(&title, f, line_writer, writer)
+        }
+        None => dump("stdin", std::io::stdin().lock(), line_writer, writer),
+    }
+}
+
 /// Main application entry point - parses arguments and coordinates the hex dump output.
 ///
 /// This function:
 /// 1. Parses command-line arguments
 /// 2. Determines terminal width and calculates optimal bytes_per_line (unless overridden)
-/// 3. Sets up a pager (less) for interactive viewing (unless --stdout is used)
+/// 3. Uses a pager (minus) for interactive viewing (unless --stdout is used or stdout is piped)
 /// 4. Reads from a file or stdin and produces the hex dump
 pub fn run() -> Result<()> {
     let args: Args = Args::parse();
-
-    let writer = std::io::stdout();
 
     // determine terminal size, and from that the number of bytes to print per line.
     let line_writer = match args.num_bytes_per_line {
@@ -231,39 +288,14 @@ pub fn run() -> Result<()> {
 
     let mut line_writer = line_writer?;
 
-    // use less as the pager, much like git
-    if !args.stdout {
-        Pager::with_pager("less --raw-control-chars --quit-if-one-screen").setup();
+    if !args.stdout && std::io::stdout().is_terminal() {
+        let pager = minus::Pager::new();
+        dump_input(&args, &mut line_writer, PagerWriter::new(pager.clone()))?;
+        minus::page_all(pager)?;
+        return Ok(());
     }
 
-    if args.demo {
-        return demo(&mut line_writer, writer);
-    }
-
-    match args.file {
-        // Reading from a known file, print its filename and it's last modified date
-        Some(file) => {
-            let md = fs::metadata(&file)?;
-            let size = Size::from_bytes(md.len());
-            let modified_time: DateTime<Local> = md.modified().unwrap().into();
-
-            let mut file_name_str = format!("{}", file.display());
-            if file_name_str.contains(' ') {
-                file_name_str = format!("'{}'", file_name_str);
-            }
-
-            let title = format!(
-                "\x1b[1m{}\x1b[0m   {}   {}",
-                file_name_str,
-                size,
-                modified_time.format("%-d %b %Y %H:%M:%S")
-            );
-
-            let f = std::fs::File::open(&file);
-            dump(title.as_str(), f?, &mut line_writer, writer)
-        }
-        None => dump("stdin", std::io::stdin().lock(), &mut line_writer, writer),
-    }
+    dump_input(&args, &mut line_writer, std::io::stdout())
 }
 
 #[cfg(test)]
@@ -483,5 +515,18 @@ mod tests {
         let output_str = String::from_utf8_lossy(&output);
         let line_count = output_str.lines().count();
         assert!(line_count >= 4098); // 4096 data lines + header + footer
+    }
+
+    #[test]
+    fn test_pager_writer() {
+        let test_data = b"Hello, minus!";
+        let mut reader = std::io::Cursor::new(test_data);
+
+        let pager = minus::Pager::new();
+        let writer = PagerWriter::new(pager);
+        let mut line_writer = LineWriter::new_bytes(16).unwrap();
+
+        let result = dump("Pager test", &mut reader, &mut line_writer, writer);
+        assert!(result.is_ok());
     }
 }

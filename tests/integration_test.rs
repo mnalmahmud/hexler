@@ -142,3 +142,27 @@ fn test_binary_data() {
     assert!(stdout.contains("ff")); // 0xff
     assert!(stdout.contains("7f")); // 0x7f
 }
+
+#[test]
+fn test_non_tty_stdout_bypasses_pager() {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_hexler"))
+        .arg("--num-bytes-per-line")
+        .arg("16")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("Failed to spawn hexler");
+
+    cmd.stdin
+        .as_mut()
+        .unwrap()
+        .write_all(b"Piped output")
+        .expect("Failed to write to stdin");
+
+    let output = cmd.wait_with_output().expect("Failed to read output");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("50")); // 'P'
+    assert!(stdout.contains("69")); // 'i'
+}

@@ -12,7 +12,7 @@ A fast & colorful hex viewer with sensible defaults and terminal-friendly output
 
 - **Terminal-aware**: Automatically adjusts to full terminal width
 - **Colorized output**: Easy-to-read syntax highlighting for different byte types  
-- **Pager integration**: Uses your system pager by default (like `git` and `man`)
+- **Pager integration**: Built-in terminal pager via `minus` by default
 - **Enhanced readability**: Displays CP437 characters for better visual parsing
 - **Fast**: Can dump about 250 MB/sec colored output to the terminal
 
@@ -55,7 +55,7 @@ Output size and runtime when processing a 181 MB executable, tested with `hyperf
 | Runtime (s) | Tool       | Comment
 |------------:|------------|------------
 |       0.443 | `hastyhex` | Doesn't print extended ASCII characters, no pager
-|       0.820 | `hexler`   | Colors, prints extended characters, shows borders, automatically uses `less` pager, automatically detects terminal width
+|       0.820 | `hexler`   | Colors, prints extended characters, shows borders, automatically uses `minus` pager, automatically detects terminal width
 |       2.337 | `xxd`      | Colors, but no extended charcters, no pager
 |       3.986 | `hexyl`    | Colors, shows borders, but no pager and no extended characters
 |       4.826 | `xd`       | Prints extended ASCII characters, only grey, no pager
