@@ -5,73 +5,96 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  smart-release:
-    name: Release via cargo-smart-release
+  create-release:
+    name: Create Release
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository (full history)
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if ! gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release create "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" --generate-notes
+          fi
+
+  build-release:
+    name: Build (${{ matrix.asset_name }})
+    needs: create-release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary_name: hexler
+            asset_name: hexler-linux-x86_64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            binary_name: hexler
+            asset_name: hexler-linux-x86_64-musl
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary_name: hexler.exe
+            asset_name: hexler-windows-x86_64.exe
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            binary_name: hexler
+            asset_name: hexler-macos-x86_64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            binary_name: hexler
+            asset_name: hexler-macos-aarch64
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
         with:
-          fetch-depth: 0
-          fetch-tags: true
-          persist-credentials: true
+          targets: ${{ matrix.target }}
+
+      - name: Install musl tools (Linux musl only)
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+      - name: Build release binary
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Upload Release Asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary_name }}" "${{ matrix.asset_name }}"
+          gh release upload "${GITHUB_REF_NAME}" "${{ matrix.asset_name }}" --clobber
+
+  publish-crate:
+    name: Publish to crates.io
+    needs: build-release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install cargo-smart-release
-        # cache cargo registry, git index and installed binaries to speed up repeated runs
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            ~/.cargo/bin
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-smart-release
-          restore-keys: |
-            ${{ runner.os }}-cargo-
-
-      - name: Ensure cargo-smart-release
-        run: |
-          if [ -x "$HOME/.cargo/bin/cargo-smart-release" ]; then
-            echo "cargo-smart-release found in cache, skipping install"
-            $HOME/.cargo/bin/cargo-smart-release --version || true
-          else
-            cargo install cargo-smart-release
-          fi
-
-      - name: Ensure non-detached HEAD
-        # create a safe branch if we're on a detached HEAD so tools that need git history work
-        run: |
-          if [ -z "$(git symbolic-ref --quiet HEAD 2>/dev/null)" ]; then
-            echo "Detected detached HEAD. Creating temporary branch 'release-ci'"
-            git branch -f release-ci
-            git checkout release-ci
-          else
-            echo "On branch $(git rev-parse --abbrev-ref HEAD)"
-          fi
-
-      - name: Ensure git author/committer identity
-        # cargo-smart-release expects a parseable GIT_AUTHOR_IDENT; set a safe default
-        run: |
-          git config user.name "Martin Leitner-Ankerl"
-          git config user.email "martin.ankerl@gmail.com"
-          # Provide simple ident strings so tools that parse GIT_AUTHOR_IDENT work
-          if [ -z "${GIT_AUTHOR_IDENT:-}" ]; then
-            echo "GIT_AUTHOR_IDENT=Martin Leitner-Ankerl <martin.ankerl@gmail.com>" >> $GITHUB_ENV
-          fi
-          if [ -z "${GIT_COMMITTER_IDENT:-}" ]; then
-            echo "GIT_COMMITTER_IDENT=Martin Leitner-Ankerl <martin.ankerl@gmail.com>" >> $GITHUB_ENV
-          fi
-
-      - name: Run cargo-smart-release
+      - name: Publish to crates.io
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-
-        # cargo-smart-release will create the GitHub Release, build artifacts and publish to crates.io
-        run: cargo smart-release --update-crates-index --execute
+        run: |
+          if [ -n "${CARGO_REGISTRY_TOKEN}" ]; then
+            cargo publish --locked --token "${CARGO_REGISTRY_TOKEN}"
+          else
+            echo "CARGO_REGISTRY_TOKEN not set, skipping crates.io publish"
+          fi
